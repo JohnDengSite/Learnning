@@ -1,0 +1,129 @@
+import asyncio
+import aiohttp
+from aiohttp import ClientSession
+from scrapy.selector import Selector
+import time
+from fake_useragent import UserAgent
+import aiomysql
+from threading import Thread
+from concurrent.futures import ThreadPoolExecutor,as_completed
+
+
+loop = asyncio.get_event_loop()
+
+ua = UserAgent()
+
+q = asyncio.LifoQueue()
+
+headers = {
+    "User-Agent": ua.random}
+
+
+class async_crawl():
+    __slots__ = ('asy_que', 'semaphore', 'semaphore2', 'event', 'count', 'a', 'b')
+
+    def __init__(self, *args):
+
+        self.asy_que = q
+        self.semaphore = asyncio.Semaphore(20)
+        self.semaphore2 = asyncio.Semaphore(10)
+        self.count = 0
+        self.event = asyncio.Event()
+        self.a = args[0]
+        self.b = args[1]
+        
+
+    async def get_body(self, url):
+        try:
+            async with aiohttp.ClientSession(headers=headers) as session:
+                async with session.get(url=url, headers=headers) as response:
+                    text = await response.text()
+                    selector = Selector(text=text)
+                    url_list = selector.css('.archive-title::attr(href)').extract()
+                    title = selector.css('.archive-title::text').extract()
+                    src_list = selector.css('.post-thumb img::attr(src)').extract()
+                    for i in zip(title, url_list, src_list):
+                        print(i)
+                        await self.for_sql(i)
+        except Exception as e:
+            print("get_body", e)
+
+    async def for_sql(self, i):
+
+        conn = await aiomysql.connect(host='127.0.0.1', port=3306,
+                                      user='root', password='root', db='ac_try2',
+                                      loop=loop, charset='utf8')
+
+        async with conn.cursor() as c:
+            if not await c.execute("SELECT * FROM asy_tit Where title='{}'".format(i[0])):
+                sqlname = "INSERT INTO asy_tit (title,url,src) VALUES (%s,%s,%s)"
+
+                await c.execute(sqlname,
+                                (i[0], i[1], i[2]))
+                await conn.commit()
+
+                try:
+
+                    result = await c.fetchall()  #
+                    print("录入数据库！", result)
+
+                except Exception as e:
+                    print("for_sql的4", e)
+
+                try:
+                    conn.close()
+
+                except Exception as e:
+                    print("for_sql的5", e)
+            else:
+                print("已经存在了")
+
+    async def wait_download(self, url):
+        try:
+            async with self.semaphore2:
+                await self.get_body(url)
+                print("get {} data complete.".format(url))
+        except Exception as e:
+            print("wait_download", e)
+
+    async def main(self, sid):
+
+        list_url = "http://blog.jobbole.com/all-posts/page/{}/".format(sid)
+        try:
+            async with self.semaphore:
+                #await asyncio.sleep(2)#数量大的时候建议弃用
+                await self.wait_download(list_url)
+                return 'Done after {}s'.format(sid)
+        except Exception as e:
+            print(e)
+
+    def run_main(self):
+        loop = asyncio.get_event_loop()
+        coroutine = [self.main(i) for i in range(self.a, self.b)]
+        task = [asyncio.ensure_future(i) for i in coroutine]
+        loop.run_until_complete(asyncio.wait(task))
+        for t in task:
+            print('Task ret: ', t.result())
+
+
+if __name__ == '__main__':
+    start = time.time()
+
+    ##########################################################Thread+asyncio的方法，尝试过线程池，但是好像并不成功
+    #######################我把网页的数量分成几份，然后每一份分配一个线程，降低单一线程的压力
+    #asy_thr_list = ()#
+    #for i in range(1, 12, 3):
+    #    t = Thread(target=async_crawl(i, i + 2).run_main())
+    #    asy_thr_list+=(t,)
+#
+    #for i in asy_thr_list:
+    #    i.start()
+#
+    #for i in asy_thr_list:
+    #    i.join()
+    ###########################################################运用ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=100) as executor:
+        asy_pool = [executor.submit(async_crawl(i,i+2).run_main()) for i in range(1,12,3)]
+    ############################################################
+    end = time.time()
+    print("Complete in {} seconds".format(end - start))
