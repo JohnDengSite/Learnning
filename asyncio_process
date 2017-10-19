@@ -9,8 +9,6 @@ from multiprocessing import Process,Pool,Semaphore
 import os
 from concurrent.futures import ProcessPoolExecutor
 
-loop = asyncio.get_event_loop()
-
 ua = UserAgent()
 
 q = asyncio.LifoQueue()
@@ -20,14 +18,14 @@ headers = {
 
 
 class async_crawl():
-    __slots__ = ('asy_que','semaphore','semaphore2','event','count','a','b')
+    __slots__ = ('asy_que','semaphore','semaphore2','loop','count','a','b')
 
     def __init__(self,a,b):
         self.asy_que = q
         self.semaphore = asyncio.Semaphore(20)
         self.semaphore2 = asyncio.Semaphore(10)
         self.count = 0
-        self.event = asyncio.Event()
+        self.loop = asyncio.get_event_loop()
         self.a = a
         self.b = b
 
@@ -52,7 +50,7 @@ class async_crawl():
 
         conn = await aiomysql.connect(host='127.0.0.1', port=3306,
                                           user='root', password='root', db='ac_try2',
-                                          loop=loop, charset='utf8')
+                                          loop=self.loop, charset='utf8')
 
         async with conn.cursor() as c:
             if not await c.execute("SELECT * FROM asy_tit Where title='{}'".format(i[0])):
@@ -100,10 +98,9 @@ class async_crawl():
 
 
     def run_main(self):
-        loop = asyncio.get_event_loop()
         coroutine = [self.main(i) for i in range(self.a,self.b)]
         task = [asyncio.ensure_future(i) for i in coroutine]
-        loop.run_until_complete(asyncio.wait(task))
+        self.loop.run_until_complete(asyncio.wait(task))
         for t in task:
             print('Task ret: ', t.result())
 
