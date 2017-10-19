@@ -9,7 +9,6 @@ from threading import Thread
 from concurrent.futures import ThreadPoolExecutor,as_completed
 
 
-loop = asyncio.get_event_loop()
 
 ua = UserAgent()
 
@@ -20,7 +19,7 @@ headers = {
 
 
 class async_crawl():
-    __slots__ = ('asy_que', 'semaphore', 'semaphore2', 'event', 'count', 'a', 'b')
+    __slots__ = ('asy_que', 'semaphore', 'semaphore2', 'loop', 'count', 'a', 'b')
 
     def __init__(self, *args):
 
@@ -28,7 +27,7 @@ class async_crawl():
         self.semaphore = asyncio.Semaphore(20)
         self.semaphore2 = asyncio.Semaphore(10)
         self.count = 0
-        self.event = asyncio.Event()
+        self.loop = asyncio.get_event_loop()
         self.a = args[0]
         self.b = args[1]
         
@@ -98,7 +97,7 @@ class async_crawl():
             print(e)
 
     def run_main(self):
-        loop = asyncio.get_event_loop()
+        loop = self.loop
         coroutine = [self.main(i) for i in range(self.a, self.b)]
         task = [asyncio.ensure_future(i) for i in coroutine]
         loop.run_until_complete(asyncio.wait(task))
