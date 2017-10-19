@@ -51,7 +51,7 @@ class async_crawl():
 
         conn = await aiomysql.connect(host='127.0.0.1', port=3306,
                                       user='root', password='root', db='ac_try2',
-                                      loop=loop, charset='utf8')
+                                      loop=self.loop, charset='utf8')
 
         async with conn.cursor() as c:
             if not await c.execute("SELECT * FROM asy_tit Where title='{}'".format(i[0])):
