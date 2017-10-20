@@ -1,0 +1,153 @@
+import asyncio
+import aiohttp
+from aiohttp import ClientSession
+from scrapy.selector import Selector
+import time
+from fake_useragent import UserAgent
+import aiomysql
+import functools
+#from threading import Thread
+#import sqlalchemy as sa
+#from aiomysql.sa import create_engine
+
+
+ua = UserAgent()
+
+q = asyncio.Queue()
+
+headers = {
+    "User-Agent": ua.random}
+
+
+class async_crawl(object):
+    __slots__ = ('asy_que','semaphore','event','semaphore2','loop','count')
+
+    def __init__(self):
+        self.asy_que = q
+        self.semaphore = asyncio.Semaphore(20)
+        self.semaphore2 = asyncio.Semaphore(10)
+        self.count = 0
+        self.loop = asyncio.get_event_loop()
+        self.event = asyncio.Event()
+
+    async def get_event(self,event,count):
+
+        print(count)
+        await event.wait()
+
+        for i in range(count):
+            print(await self.asy_que.get())
+
+
+
+
+
+
+
+    def set_event(self,event):
+        event.set()
+
+    async def get_body(self, url):
+        try:
+            async with aiohttp.ClientSession(headers=headers) as session:
+                async with session.get(url=url, headers=headers) as response:
+                    text = await response.text()
+                    selector = Selector(text=text)
+                    url_list = selector.css('.archive-title::attr(href)').extract()
+                    title = selector.css('.archive-title::text').extract()
+                    src_list = selector.css('.post-thumb img::attr(src)').extract()
+                    for i in zip(title,url_list,src_list):
+                        #await asyncio.sleep(2)
+                        await self.asy_que.put(i[1])
+                        self.count+=1
+                        if self.count%5==0:
+                        #print("=====================================================")
+                            self.set_event(self.event)
+                        #print(i)
+                        await self.for_sql(i)
+        except Exception as e:
+            print("get_body", e)
+
+
+    async def for_sql(self, i):
+
+        conn = await aiomysql.connect(host='127.0.0.1', port=3306,
+                                          user='root', password='root', db='ac_try2',
+                                          loop=self.loop, charset='utf8')
+
+        async with conn.cursor() as c:
+            if not await c.execute("SELECT * FROM asy_tit Where title='{}'".format(i[0])):
+                sqlname = "INSERT INTO asy_tit (title,url,src) VALUES (%s,%s,%s)"
+
+                await c.execute(sqlname,
+                                (i[0], i[1], i[2]))
+                await conn.commit()
+
+                try:
+
+                    result = await c.fetchall()
+                    print("录入数据库！",result)
+
+                except Exception as e:
+                    print("for_sql的4", e)
+
+                try:
+                    conn.close()
+
+                except Exception as e:
+                    print("for_sql的5", e)
+            else:
+                print("已经存在了")
+
+
+    async def wait_download(self, url):
+        try:
+            async with self.semaphore2:
+                await self.get_body(url)
+                print("get {} data complete.".format(url))
+        except Exception as e:
+            print("wait_download", e)
+
+    async def main(self,sid):
+
+        list_url = "http://blog.jobbole.com/all-posts/page/{}/".format(sid)
+        try:
+            async with self.semaphore:
+                    await asyncio.sleep(2)
+                    await self.wait_download(list_url)
+                    return 'Done after {}s'.format(sid)
+        except Exception as e:
+            print(e)
+
+
+    async def run_main(self):
+           try:
+                loop = self.loop
+
+                coroutine = [self.main(i) for i in range(1,12)]
+
+                task = [asyncio.ensure_future(i) for i in coroutine]
+                loop.call_later(0.1, functools.partial(self.set_event, self.event))
+                task2 = [asyncio.ensure_future(self.get_event(self.event,11*20))]
+                await asyncio.wait(task)
+                await asyncio.wait(task2)
+
+
+                for t in task:
+                    print('Task ret: ', t.result())
+           except Exception as e:
+               print(e)
+
+    def asy_run(self):
+
+        self.loop.run_until_complete(asyncio.ensure_future(self.run_main()))
+
+
+
+
+if __name__ == '__main__':
+    start = time.time()
+    run_cra = async_crawl()
+    run_cra.asy_run()
+    end = time.time()
+    print("Complete in {} seconds".format(end - start))
