@@ -18,86 +18,112 @@ class LianjiaCrawl():
     def __init__(self):
         self.loop = asyncio.get_event_loop()
         self.q = asyncio.LifoQueue(loop=self.loop)
-        self.semaphore = asyncio.Semaphore(5,loop=self.loop)
-        self.delay = random.random()
+        self.q_url = asyncio.LifoQueue(loop=self.loop)
+        self.semaphore = asyncio.Semaphore(30, loop=self.loop)
+        self.delay = random.random() * 2
+        self.c = 0
+
+    async def gen_url(self, city, sid):
+        await asyncio.sleep(self.delay, loop=self.loop)
+        url = 'https://{0}.lianjia.com/zufang/pg{1}'.format(city, sid)
+        await asyncio.sleep(self.delay, loop=self.loop)
+
+        print(url)
+
+        await self.q_url.put(url)
+
+        await self.get_url_page()
+
+    async def get_url_page(self):
+        while not self.q_url.empty():
+            url = await self.q_url.get()
+
+            async with self.semaphore:
+                async with aiohttp.ClientSession(headers=headers, loop=self.loop) as session:
+                    async with session.get(url=url) as res:
+                        text = await res.text()
+                        response = Selector(text=text)
+                        house_info_title = response.css('.info-panel a::text').extract()
+                        house_info_link = response.css('.info-panel a::attr(href)').extract()
+                        house_info_img = response.css('.pic-panel a img::attr(data-img)').extract()
+                        house_info_region = response.css('.region::text').extract()
+                        house_info_meters = response.css('.meters::text').extract()
+                        house_info_fx = response.css('.where span:nth-child(4)::text').extract()
+                        house_info_zone = response.css('.con a::text').extract()
+                        house_info_zone_deial = response.css('.con::text').extract()
+                        house_info_zone_detala = [house_info_zone_deial[i] for i in
+                                                  range(0, len(house_info_zone_deial), 2)]
+                        house_info_zone_detalb = [house_info_zone_deial[i - 1] for i in
+                                                  range(0, len(house_info_zone_deial), 2)]
+                        house_info_rmf = [','.join(i) for i in zip(house_info_region, house_info_meters, house_info_fx,
+                                                                   house_info_zone_detala, house_info_zone_detalb)]
+                        house_info_price = response.css('.price span::text').extract()
+                        house_info_look = response.css('.square .num::text').extract()
+                        house_info_detail = response.css('.address div::text').extract()
+
+                        city = [response.css('.index_h1::text').extract()[0] for i in range(30)]
+
+                        for item in zip(house_info_title, house_info_link, house_info_img, house_info_rmf,
+                                        house_info_price, house_info_look, city):
+                            self.c+=1
+                            await self.q.put(item+(self.c,))
+                            await self.for_sql()
+
+    async def for_sql(self):  # ,item
+        try:
+            pool = await aiomysql.create_pool(host='127.0.0.1', port=3306,
+                                          user='root', password='root', db='ac_try2',
+                                          loop=self.loop, charset='utf8', maxsize=80)
+        except Exception as e:
+            print(e)
+            print('链接重连-------------------')
+            await asyncio.sleep(2)
+            pool = await aiomysql.create_pool(host='127.0.0.1', port=3306,
+                                              user='root', password='root', db='ac_try2',
+                                              loop=self.loop, charset='utf8', maxsize=80)
+        sqlname = "INSERT IGNORE INTO lianjia_mu (title,link,img,rmf,price,look,city,id) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)"
+        while not self.q.empty():
+            item=[await self.q.get()]
+            print(item)
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    try:
+                            await cur.executemany(sqlname,
+                                              (item))
+                            #print(await cur.description)
+                            await conn.commit()
+                            r = await cur.fetchone()
+                            print("录入数据库！", r,self.c)
+
+                    except Exception as e:
+                        print(e)
 
 
-    async def gen_url(self,city,sid):
-            await asyncio.sleep(self.delay,loop=self.loop)
-            url = 'https://{0}.lianjia.com/zufang/pg{1}'.format(city, sid)
-            await asyncio.sleep(self.delay,loop=self.loop)
-            await self.get_url_page(url)
+    async def main(self):
 
-
-    async def get_url_page(self,url):
-        async with self.semaphore:
-            await asyncio.sleep(self.delay,loop=self.loop)
-            async with aiohttp.ClientSession(headers=headers,loop=self.loop) as session:
-                async with session.get(url=url) as res:
-                    text = await res.text()
-                    response = Selector(text=text)
-                    house_info_title = response.css('.info-panel a::text').extract()
-                    house_info_link = response.css('.info-panel a::attr(href)').extract()
-                    house_info_img = response.css('.pic-panel a img::attr(data-img)').extract()
-                    house_info_region = response.css('.region::text').extract()
-                    house_info_meters = response.css('.meters::text').extract()
-                    house_info_fx = response.css('.where span:nth-child(4)::text').extract()
-                    house_info_zone = response.css('.con a::text').extract()
-                    house_info_zone_deial = response.css('.con::text').extract()
-                    house_info_zone_detala = [house_info_zone_deial[i] for i in range(0,len(house_info_zone_deial),2)]
-                    house_info_zone_detalb = [house_info_zone_deial[i-1] for i in range(0,len(house_info_zone_deial),2)]
-                    house_info_rmf = [','.join(i) for i in zip(house_info_region, house_info_meters, house_info_fx,house_info_zone_detala,house_info_zone_detalb)]
-                    house_info_price = response.css('.price span::text').extract()
-                    house_info_look = response.css('.square .num::text').extract()
-                    house_info_detail = response.css('.address div::text').extract()
-                    city = response.css('.index_h1::text').extract()
-                    for item in zip(house_info_title,house_info_link,house_info_img,house_info_rmf,
-                                    house_info_price,house_info_look,city):
-                        print(url)
-                        print(item)
-                        await self.for_sql(item)
-
-
-    async def for_sql(self,item):
-
-
-        conn = await aiomysql.connect(host='127.0.0.1', port=3306,
-                                      user='root', password='root', db='ac_try2',
-                                      loop=self.loop, charset='utf8')
-
-        async with conn.cursor() as c:
-            try:
-                if not await c.execute("SELECT * FROM lianjia_duo Where link='{}'".format(item[1])):
-                    sqlname = "INSERT INTO lianjia_duo (title,link,img,rmf,price,look,city) VALUES (%s,%s,%s,%s,%s,%s,%s)"
-
-                    await c.execute(sqlname,
-                                    (item[0],item[1],item[2],''.join(item[3].split()),item[4],item[5],item[6]))
-                    result = await c.fetchall()
-                    await conn.commit()
-                    print("录入数据库！", result)
-                    conn.close()
-                else:
-                    print("已经存在了")
-            except Exception as e:
-                print(e)
-
-
-
-
-
-    def main(self):
         coro = []
         city_list = ['fs', 'bj', 'cd', 'cq', 'cs', 'dl', 'dg', 'gz', 'hz', 'hui']
         for c in city_list:
-            con = [self.gen_url(c,i) for i in range(1,100)]
-            coro +=con
+            con = [self.gen_url(c, i) for i in range(1, 150)]
+            coro += con
         task = [asyncio.ensure_future(i) for i in coro]
+        sql_task = [asyncio.ensure_future(self.for_sql()) for i in range(80)]
 
-        self.loop.run_until_complete(asyncio.wait(task))
+        try:
+            await asyncio.wait(task)
+            await asyncio.wait(sql_task)
+            # await asyncio.wait()
+            # await asyncio.wait(com_task)
+        except Exception as e:
+            print(e)
+
+    def asy_run(self):
+        self.loop.run_until_complete(asyncio.ensure_future(self.main()))
+
 
 if __name__ == '__main__':
     start = time.time()
     crawl = LianjiaCrawl()
-    crawl.main()
+    crawl.asy_run()
     end = time.time()
     print("Complete in {} seconds".format(end - start))
